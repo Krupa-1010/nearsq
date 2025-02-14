@@ -560,6 +560,9 @@ class _MyHomePageState extends State<MyHomePage> {
                             .routePoints!,
                         strokeWidth: 4,
                         color: Colors.blue,
+                        strokeCap: StrokeCap.round,
+                        strokeJoin: StrokeJoin.round,
+                        isDotted: false,
                       ),
                   ],
                 ),
@@ -659,7 +662,11 @@ class RescuerLocationProvider extends ChangeNotifier {
     final url = 'https://api.mapbox.com/directions/v5/mapbox/driving/'
         '${rescuerLocation.longitude},${rescuerLocation.latitude};'
         '${sosLocation.longitude},${sosLocation.latitude}'
-        '?geometries=geojson&access_token=$_mapboxToken';
+        '?alternatives=true'
+        '&geometries=geojson'
+        '&overview=full'
+        '&steps=true'
+        '&access_token=$_mapboxToken';
 
     try {
       final response = await http.get(Uri.parse(url));
