@@ -11,6 +11,8 @@ import 'package:rxdart/rxdart.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:provider/provider.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 
 class SOSRequest {
   final LatLng location;
@@ -546,6 +548,22 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                 ),
               if (_selectedLayer == 'Both' || _selectedLayer == 'Markers Only')
+                PolylineLayer(
+                  polylines: [
+                    if (Provider.of<RescuerLocationProvider>(context,
+                                listen: true)
+                            .routePoints !=
+                        null)
+                      Polyline(
+                        points: Provider.of<RescuerLocationProvider>(context,
+                                listen: false)
+                            .routePoints!,
+                        strokeWidth: 4,
+                        color: Colors.blue,
+                      ),
+                  ],
+                ),
+              if (_selectedLayer == 'Both' || _selectedLayer == 'Markers Only')
                 MarkerLayer(
                   markers: [
                     ...List.generate(sosRequests.length, (index) {
@@ -624,11 +642,36 @@ class RescuerLocationProvider extends ChangeNotifier {
   LatLng? _location;
   Timer? _locationTimer;
   late DatabaseReference databaseRef;
+  List<LatLng>? _routePoints;
+  List<LatLng>? get routePoints => _routePoints;
+
+  // Add your Mapbox access token
+  final String _mapboxToken =
+      'pk.eyJ1IjoiYW5hbmQxMDYiLCJhIjoiY2x1dXlwMGdiMGFnMjJxbW9jcWo2eXBjMCJ9.gBCavskm54ytN6xsD0CgXQ';
 
   LatLng? get location => _location;
 
   RescuerLocationProvider() {
     databaseRef = FirebaseDatabase.instance.ref();
+  }
+
+  Future<void> _updateRoute(LatLng rescuerLocation, LatLng sosLocation) async {
+    final url = 'https://api.mapbox.com/directions/v5/mapbox/driving/'
+        '${rescuerLocation.longitude},${rescuerLocation.latitude};'
+        '${sosLocation.longitude},${sosLocation.latitude}'
+        '?geometries=geojson&access_token=$_mapboxToken';
+
+    try {
+      final response = await http.get(Uri.parse(url));
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final route = RouteCoordinates.fromJson(data);
+        _routePoints = route.points;
+        notifyListeners();
+      }
+    } catch (e) {
+      print('Error fetching route: $e');
+    }
   }
 
   void startTracking(SOSRequest sos) async {
@@ -645,6 +688,9 @@ class RescuerLocationProvider extends ChangeNotifier {
           'toLon': sos.location.longitude,
           'status': 'responding'
         });
+
+        // Update route
+        await _updateRoute(_location!, sos.location);
 
         notifyListeners();
       } catch (e) {
@@ -670,5 +716,20 @@ class RescuerLocationProvider extends ChangeNotifier {
   void dispose() {
     _locationTimer?.cancel();
     super.dispose();
+  }
+}
+
+// Add this class to handle route data
+class RouteCoordinates {
+  final List<LatLng> points;
+
+  RouteCoordinates({required this.points});
+
+  factory RouteCoordinates.fromJson(Map<String, dynamic> json) {
+    final route = json['routes'][0];
+    final coords = (route['geometry']['coordinates'] as List)
+        .map((coord) => LatLng(coord[1].toDouble(), coord[0].toDouble()))
+        .toList();
+    return RouteCoordinates(points: coords);
   }
 }
