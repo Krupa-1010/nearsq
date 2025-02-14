@@ -460,14 +460,28 @@ class _MyHomePageState extends State<MyHomePage> {
           'status': 'responding'
         });
 
-        setState(() {
-          _rescuerLocation = LatLng(position.latitude, position.longitude);
-          print('Rescuer Location Updated - Lat: ${position.latitude}, Lon: ${position.longitude}');
-        });
+        // Only call setState if the position has changed significantly
+        if (_rescuerLocation == null ||
+            _hasLocationChangedSignificantly(
+              _rescuerLocation!,
+              LatLng(position.latitude, position.longitude),
+            )) {
+          setState(() {
+            _rescuerLocation = LatLng(position.latitude, position.longitude);
+            print('Rescuer Location Updated - Lat: ${position.latitude}, Lon: ${position.longitude}');
+          });
+        }
       } catch (e) {
         print('Error updating location: $e');
       }
     });
+  }
+
+  // Add this helper method to check if location has changed significantly
+  bool _hasLocationChangedSignificantly(LatLng oldLocation, LatLng newLocation) {
+    const double significantChange = 0.00001; // Approximately 1 meter
+    return (oldLocation.latitude - newLocation.latitude).abs() > significantChange ||
+           (oldLocation.longitude - newLocation.longitude).abs() > significantChange;
   }
 
   void _stopLocationTracking() {
