@@ -72,6 +72,15 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
+  late DatabaseReference databaseRef;
+  Timer? _locationTimer; // Keep this for the timer
+
+  @override
+  void initState() {
+    super.initState();
+    databaseRef = FirebaseDatabase.instance.ref();
+  }
+
   // Remove these fields:
   // final _rescuerLocationNotifier = ValueNotifier<LatLng?>(null);
   // Timer? _locationTimer;
@@ -457,11 +466,8 @@ class _MyHomePageState extends State<MyHomePage> {
           'status': 'responding'
         });
 
-        setState(() {
-          _rescuerLocation = LatLng(position.latitude, position.longitude);
-          print(
-              'Rescuer Location Updated - Lat: ${position.latitude}, Lon: ${position.longitude}');
-        });
+        Provider.of<RescuerLocationProvider>(context, listen: false)
+            .startTracking(sos);
       } catch (e) {
         print('Error updating location: $e');
       }
