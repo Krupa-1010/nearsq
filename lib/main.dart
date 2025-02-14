@@ -7,12 +7,13 @@ import 'package:firebase_core/firebase_core.dart';
 import 'dart:async';
 import 'package:flutter/widgets.dart';
 import 'firebase_options.dart';
-import 'package:rxdart/rxdart.dart';
+import 'package:rxdart/rxdart.dart' as rxdart;
 import 'package:geolocator/geolocator.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:get/get.dart';
 
 class SOSRequest {
   final LatLng location;
@@ -53,15 +54,12 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (_) => RescuerLocationProvider(),
-      child: MaterialApp(
-        title: 'Kochi Disaster Severity Map',
-        theme: ThemeData(
-          primarySwatch: Colors.red,
-        ),
-        home: const MyHomePage(),
+    return GetMaterialApp(
+      title: 'Kochi Disaster Severity Map',
+      theme: ThemeData(
+        primarySwatch: Colors.red,
       ),
+      home: const MyHomePage(),
     );
   }
 }
@@ -74,6 +72,7 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
+  final rescuerController = Get.put(RescuerController());
   late DatabaseReference databaseRef;
   Timer? _locationTimer; // Keep this for the timer
 
@@ -304,7 +303,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
   // Add this method to combine all SOS requests
   Stream<List<SOSRequest>> _getAllSOSRequests() {
-    return Rx.combineLatest3(
+    return rxdart.Rx.combineLatest3(
       _getOnlineSOSRequests(),
       _getOfflineSOSRequests(),
       _getScrapSOSRequests(),
@@ -453,31 +452,11 @@ class _MyHomePageState extends State<MyHomePage> {
     final hasPermission = await _handleLocationPermission();
     if (!hasPermission) return;
 
-    _locationTimer?.cancel();
-
-    _locationTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
-      try {
-        final position = await Geolocator.getCurrentPosition();
-
-        // Update realtime database with rescuer's location
-        await databaseRef.set({
-          'frLat': position.latitude,
-          'frLon': position.longitude,
-          'toLat': sos.location.latitude,
-          'toLon': sos.location.longitude,
-          'status': 'responding'
-        });
-
-        Provider.of<RescuerLocationProvider>(context, listen: false)
-            .startTracking(sos);
-      } catch (e) {
-        print('Error updating location: $e');
-      }
-    });
+    rescuerController.startTracking(sos);
   }
 
   void _stopLocationTracking() {
-    context.read<RescuerLocationProvider>().stopTracking();
+    rescuerController.stopTracking();
   }
 
   @override
@@ -548,78 +527,67 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                 ),
               if (_selectedLayer == 'Both' || _selectedLayer == 'Markers Only')
-                PolylineLayer(
-                  polylines: [
-                    if (Provider.of<RescuerLocationProvider>(context,
-                                listen: true)
-                            .routePoints !=
-                        null)
-                      Polyline(
-                        points: Provider.of<RescuerLocationProvider>(context,
-                                listen: false)
-                            .routePoints!,
-                        strokeWidth: 4,
-                        color: Colors.blue,
-                        strokeCap: StrokeCap.round,
-                        strokeJoin: StrokeJoin.round,
-                        isDotted: false,
-                      ),
-                  ],
-                ),
+                Obx(() => PolylineLayer(
+                      polylines: [
+                        if (rescuerController.routePoints.value != null)
+                          Polyline(
+                            points: rescuerController.routePoints.value!,
+                            strokeWidth: 4,
+                            color: Colors.blue,
+                            strokeCap: StrokeCap.round,
+                            strokeJoin: StrokeJoin.round,
+                            isDotted: false,
+                          ),
+                      ],
+                    )),
               if (_selectedLayer == 'Both' || _selectedLayer == 'Markers Only')
-                MarkerLayer(
-                  markers: [
-                    ...List.generate(sosRequests.length, (index) {
-                      final sos = sosRequests[index];
-                      return Marker(
-                        point: sos.location,
-                        width: 30,
-                        height: 30,
-                        child: GestureDetector(
-                          onTap: () => _showSOSDetails(context, sos),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: sos.source == 'scrap'
-                                  ? Colors.blue
-                                  : Colors.red,
-                              shape: BoxShape.circle,
+                Obx(() => MarkerLayer(
+                      markers: [
+                        ...List.generate(sosRequests.length, (index) {
+                          final sos = sosRequests[index];
+                          return Marker(
+                            point: sos.location,
+                            width: 30,
+                            height: 30,
+                            child: GestureDetector(
+                              onTap: () => _showSOSDetails(context, sos),
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: sos.source == 'scrap'
+                                      ? Colors.blue
+                                      : Colors.red,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: Icon(
+                                  sos.source == 'scrap'
+                                      ? Icons.crisis_alert
+                                      : Icons.warning_amber,
+                                  color: Colors.white,
+                                  size: 20,
+                                ),
+                              ),
                             ),
-                            child: Icon(
-                              sos.source == 'scrap'
-                                  ? Icons.crisis_alert
-                                  : Icons.warning_amber,
-                              color: Colors.white,
-                              size: 20,
+                          );
+                        }),
+                        if (rescuerController.location.value != null)
+                          Marker(
+                            point: rescuerController.location.value!,
+                            width: 30,
+                            height: 30,
+                            child: Container(
+                              decoration: const BoxDecoration(
+                                color: Colors.green,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(
+                                Icons.directions_run,
+                                color: Colors.white,
+                                size: 20,
+                              ),
                             ),
                           ),
-                        ),
-                      );
-                    }),
-                    // Rescuer marker
-                    if (Provider.of<RescuerLocationProvider>(context,
-                                listen: true)
-                            .location !=
-                        null)
-                      Marker(
-                        point: Provider.of<RescuerLocationProvider>(context,
-                                listen: false)
-                            .location!,
-                        width: 30,
-                        height: 30,
-                        child: Container(
-                          decoration: const BoxDecoration(
-                            color: Colors.green,
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(
-                            Icons.directions_run,
-                            color: Colors.white,
-                            size: 20,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
+                      ],
+                    )),
             ],
           );
         },
@@ -641,20 +609,17 @@ class _MyHomePageState extends State<MyHomePage> {
 }
 
 // Add this new class for location state management
-class RescuerLocationProvider extends ChangeNotifier {
-  LatLng? _location;
+class RescuerController extends GetxController {
+  Rx<LatLng?> location = Rx<LatLng?>(null);
+  Rx<List<LatLng>?> routePoints = Rx<List<LatLng>?>(null);
   Timer? _locationTimer;
   late DatabaseReference databaseRef;
-  List<LatLng>? _routePoints;
-  List<LatLng>? get routePoints => _routePoints;
 
   // Add your Mapbox access token
   final String _mapboxToken =
       'pk.eyJ1IjoiYW5hbmQxMDYiLCJhIjoiY2x1dXlwMGdiMGFnMjJxbW9jcWo2eXBjMCJ9.gBCavskm54ytN6xsD0CgXQ';
 
-  LatLng? get location => _location;
-
-  RescuerLocationProvider() {
+  RescuerController() {
     databaseRef = FirebaseDatabase.instance.ref();
   }
 
@@ -673,8 +638,7 @@ class RescuerLocationProvider extends ChangeNotifier {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final route = RouteCoordinates.fromJson(data);
-        _routePoints = route.points;
-        notifyListeners();
+        routePoints.value = route.points;
       }
     } catch (e) {
       print('Error fetching route: $e');
@@ -686,7 +650,7 @@ class RescuerLocationProvider extends ChangeNotifier {
     _locationTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
       try {
         final position = await Geolocator.getCurrentPosition();
-        _location = LatLng(position.latitude, position.longitude);
+        location.value = LatLng(position.latitude, position.longitude);
 
         await databaseRef.set({
           'frLat': position.latitude,
@@ -697,9 +661,9 @@ class RescuerLocationProvider extends ChangeNotifier {
         });
 
         // Update route
-        await _updateRoute(_location!, sos.location);
-
-        notifyListeners();
+        if (location.value != null) {
+          await _updateRoute(location.value!, sos.location);
+        }
       } catch (e) {
         print('Error updating location: $e');
       }
@@ -715,14 +679,14 @@ class RescuerLocationProvider extends ChangeNotifier {
       'toLat': null,
       'toLon': null
     });
-    _location = null;
-    notifyListeners();
+    location.value = null;
+    routePoints.value = null;
   }
 
   @override
-  void dispose() {
+  void onClose() {
     _locationTimer?.cancel();
-    super.dispose();
+    super.onClose();
   }
 }
 
