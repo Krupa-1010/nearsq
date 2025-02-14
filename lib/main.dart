@@ -442,10 +442,32 @@ class _MyHomePageState extends State<MyHomePage> {
     final hasPermission = await _handleLocationPermission();
     if (!hasPermission) return;
 
-    context.read<RescuerLocationProvider>().startTracking(sos);
+    _locationTimer?.cancel();
+
+    _locationTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      try {
+        final position = await Geolocator.getCurrentPosition();
+
+        // Update realtime database with rescuer's location
+        await databaseRef.set({
+          'frLat': position.latitude,
+          'frLon': position.longitude,
+          'toLat': sos.location.latitude,
+          'toLon': sos.location.longitude,
+          'status': 'responding'
+        });
+
+        setState(() {
+          _rescuerLocation = LatLng(position.latitude, position.longitude);
+          print(
+              'Rescuer Location Updated - Lat: ${position.latitude}, Lon: ${position.longitude}');
+        });
+      } catch (e) {
+        print('Error updating location: $e');
+      }
+    });
   }
 
-  // Update _stopLocationTracking method
   void _stopLocationTracking() {
     context.read<RescuerLocationProvider>().stopTracking();
   }
