@@ -31,9 +31,16 @@ class SOSRequest {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+  } catch (e) {
+    // If Firebase is already initialized, catch the exception
+    if (e is! FirebaseException || e.code != 'duplicate-app') {
+      rethrow;
+    }
+  }
   runApp(const MyApp());
 }
 
@@ -62,25 +69,57 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> {
   StreamController<void> get _rebuildStream => StreamController<void>();
   
-  // Define the data points correctly
-  final List<WeightedLatLng> data = [
-    // High severity areas
-    WeightedLatLng(LatLng(9.9312, 76.2673), 100.0), // Fort Kochi
-    WeightedLatLng(LatLng(9.9894, 76.2956), 90.0),  // Vypeen
-    WeightedLatLng(LatLng(9.9816, 76.2999), 85.0),  // Bolgatty
+  // Remove the static data points
+  List<WeightedLatLng> _getHeatmapData(List<SOSRequest> requests) {
+    List<WeightedLatLng> heatmapData = [];
     
-    // Medium severity areas
-    WeightedLatLng(LatLng(9.9657, 76.2421), 60.0),  // Mattancherry
-    WeightedLatLng(LatLng(9.9671, 76.2858), 55.0),  // Willingdon Island
-    WeightedLatLng(LatLng(9.9450, 76.3115), 50.0),  // Ernakulam South
+    for (var request in requests) {
+      // Assign weights based on status and source
+      double weight = _getRequestWeight(request);
+      
+      heatmapData.add(
+        WeightedLatLng(request.location, weight)
+      );
+    }
     
-    // Low severity areas
-    WeightedLatLng(LatLng(9.9816, 76.3234), 30.0),  // Kaloor
-    WeightedLatLng(LatLng(9.9975, 76.3089), 25.0),  // Edappally
-    WeightedLatLng(LatLng(9.9339, 76.3142), 20.0),  // Thevara
-  ];
+    return heatmapData;
+  }
 
-  // Define sharp color boundaries without transitions
+  // Helper method to determine weight based on request properties
+  double _getRequestWeight(SOSRequest request) {
+    // Base weight
+    double weight = 50.0;
+    
+    // Adjust weight based on status
+    switch (request.status) {
+      case 'pending':
+        weight *= 2.0; // Higher weight for pending requests
+        break;
+      case 'responding':
+        weight *= 1.5; // Medium weight for responding
+        break;
+      case 'rescued':
+        weight *= 0.5; // Lower weight for rescued
+        break;
+    }
+    
+    // Adjust weight based on source
+    switch (request.source) {
+      case 'online':
+        weight *= 1.2; // Higher priority for real-time requests
+        break;
+      case 'offline':
+        weight *= 1.0; // Normal priority
+        break;
+      case 'scrap':
+        weight *= 0.8; // Lower priority for scraped data
+        break;
+    }
+    
+    return weight;
+  }
+
+  // Keep the existing gradients
   final Map<double, MaterialColor> gradients = {
     0.0: Colors.green,     // Safe areas (0-0.33)
     0.34: Colors.yellow,   // Warning areas (0.34-0.66)
@@ -488,46 +527,41 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
         ],
       ),
-      body: FlutterMap(
-        options: MapOptions(
-          initialCenter: const LatLng(9.9312, 76.2673),
-          initialZoom: 12.0,
-        ),
-        children: [
-          TileLayer(
-            urlTemplate: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
-          ),
-          if (_selectedLayer == 'Both' || _selectedLayer == 'Heatmap Only')
-            HeatMapLayer(
-              heatMapDataSource: InMemoryHeatMapDataSource(data: data),
-              heatMapOptions: HeatMapOptions(
-                gradient: gradients,
-                minOpacity: 1,
-                radius: 90,
-              ),
-              reset: _rebuildStream.stream,
+      body: StreamBuilder<List<SOSRequest>>(
+        stream: _getAllSOSRequests(),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return const Center(child: Text('Error loading data'));
+          }
+
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          final sosRequests = snapshot.data ?? [];
+          final heatmapData = _getHeatmapData(sosRequests);
+
+          return FlutterMap(
+            options: MapOptions(
+              initialCenter: const LatLng(9.9312, 76.2673),
+              initialZoom: 12.0,
             ),
-          if (_selectedLayer == 'Both' || _selectedLayer == 'Markers Only')
-            StreamBuilder<List<SOSRequest>>(
-              stream: _getAllSOSRequests(),
-              builder: (context, snapshot) {
-                if (snapshot.hasError) {
-                  print('StreamBuilder error: ${snapshot.error}');
-                  return const SizedBox(); // Return empty widget instead of Text
-                }
-
-                if (snapshot.connectionState == ConnectionState.waiting) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-
-                final sosRequests = snapshot.data ?? [];
-                print('Number of SOS requests: ${sosRequests.length}'); // Debug print
-
-                if (sosRequests.isEmpty) {
-                  print('No SOS requests found');
-                }
-
-                return MarkerLayer(
+            children: [
+              TileLayer(
+                urlTemplate: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+              ),
+              if (_selectedLayer == 'Both' || _selectedLayer == 'Heatmap Only')
+                HeatMapLayer(
+                  heatMapDataSource: InMemoryHeatMapDataSource(data: heatmapData),
+                  heatMapOptions: HeatMapOptions(
+                    gradient: gradients,
+                    minOpacity: 1,
+                    radius: 90,
+                  ),
+                  reset: _rebuildStream.stream,
+                ),
+              if (_selectedLayer == 'Both' || _selectedLayer == 'Markers Only')
+                MarkerLayer(
                   markers: [
                     // Existing SOS markers
                     ...List.generate(sosRequests.length, (index) {
@@ -571,10 +605,10 @@ class _MyHomePageState extends State<MyHomePage> {
                         ),
                       ),
                   ],
-                );
-              },
-            ),
-        ],
+                ),
+            ],
+          );
+        },
       ),
     );
   }
