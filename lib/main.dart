@@ -10,13 +10,15 @@ import 'firebase_options.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:provider/provider.dart';
 
 class SOSRequest {
   final LatLng location;
   final String msg;
   final String name;
-  final String url;  // Changed from phone to url for scrap data
-  final String source; // Add source to differentiate between online/offline/scrap
+  final String url; // Changed from phone to url for scrap data
+  final String
+      source; // Add source to differentiate between online/offline/scrap
   String status; // Make this mutable
 
   SOSRequest({
@@ -49,12 +51,15 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Kochi Disaster Severity Map',
-      theme: ThemeData(
-        primarySwatch: Colors.red,
+    return ChangeNotifierProvider(
+      create: (_) => RescuerLocationProvider(),
+      child: MaterialApp(
+        title: 'Kochi Disaster Severity Map',
+        theme: ThemeData(
+          primarySwatch: Colors.red,
+        ),
+        home: const MyHomePage(),
       ),
-      home: const MyHomePage(),
     );
   }
 }
@@ -67,21 +72,24 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-  StreamController<void> get _rebuildStream => StreamController<void>();
-  
+  // Remove these fields:
+  // final _rescuerLocationNotifier = ValueNotifier<LatLng?>(null);
+  // Timer? _locationTimer;
+  // Position? _currentPosition;
+  // LatLng? _rescuerLocation;
+  // late DatabaseReference databaseRef;
+
   // Remove the static data points
   List<WeightedLatLng> _getHeatmapData(List<SOSRequest> requests) {
     List<WeightedLatLng> heatmapData = [];
-    
+
     for (var request in requests) {
       // Assign weights based on status and source
       double weight = _getRequestWeight(request);
-      
-      heatmapData.add(
-        WeightedLatLng(request.location, weight)
-      );
+
+      heatmapData.add(WeightedLatLng(request.location, weight));
     }
-    
+
     return heatmapData;
   }
 
@@ -89,7 +97,7 @@ class _MyHomePageState extends State<MyHomePage> {
   double _getRequestWeight(SOSRequest request) {
     // Base weight
     double weight = 50.0;
-    
+
     // Adjust weight based on status
     switch (request.status) {
       case 'pending':
@@ -102,7 +110,7 @@ class _MyHomePageState extends State<MyHomePage> {
         weight *= 0.5; // Lower weight for rescued
         break;
     }
-    
+
     // Adjust weight based on source
     switch (request.source) {
       case 'online':
@@ -115,15 +123,15 @@ class _MyHomePageState extends State<MyHomePage> {
         weight *= 0.8; // Lower priority for scraped data
         break;
     }
-    
+
     return weight;
   }
 
   // Keep the existing gradients
   final Map<double, MaterialColor> gradients = {
-    0.0: Colors.green,     // Safe areas (0-0.33)
-    0.34: Colors.yellow,   // Warning areas (0.34-0.66)
-    0.67: Colors.red,      // Danger areas (0.67-1.0)
+    0.0: Colors.green, // Safe areas (0-0.33)
+    0.34: Colors.yellow, // Warning areas (0.34-0.66)
+    0.67: Colors.red, // Danger areas (0.67-1.0)
   };
 
   int index = 0;
@@ -289,7 +297,8 @@ class _MyHomePageState extends State<MyHomePage> {
       _getOnlineSOSRequests(),
       _getOfflineSOSRequests(),
       _getScrapSOSRequests(),
-      (List<SOSRequest> online, List<SOSRequest> offline, List<SOSRequest> scrap) {
+      (List<SOSRequest> online, List<SOSRequest> offline,
+          List<SOSRequest> scrap) {
         return [...online, ...offline, ...scrap];
       },
     );
@@ -400,20 +409,6 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-  Timer? _locationTimer;
-  Position? _currentPosition;
-  LatLng? _rescuerLocation;  // To store rescuer's location
-
-  // Add database reference as a class field
-  late DatabaseReference databaseRef;
-
-  @override
-  void initState() {
-    super.initState();
-    // Initialize the database reference
-    databaseRef = FirebaseDatabase.instance.ref();  // Simplified initialization
-  }
-
   Future<bool> _handleLocationPermission() async {
     bool serviceEnabled;
     LocationPermission permission;
@@ -421,7 +416,8 @@ class _MyHomePageState extends State<MyHomePage> {
     serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Location services are disabled. Please enable the services')));
+          content: Text(
+              'Location services are disabled. Please enable the services')));
       return false;
     }
     permission = await Geolocator.checkPermission();
@@ -441,56 +437,17 @@ class _MyHomePageState extends State<MyHomePage> {
     return true;
   }
 
+  // Update _startLocationTracking method
   void _startLocationTracking(SOSRequest sos) async {
     final hasPermission = await _handleLocationPermission();
     if (!hasPermission) return;
 
-    _locationTimer?.cancel();
-
-    _locationTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
-      try {
-        final position = await Geolocator.getCurrentPosition();
-        
-        // Update realtime database with rescuer's location
-        await databaseRef.set({
-          'frLat': position.latitude,
-          'frLon': position.longitude,
-          'toLat': sos.location.latitude,
-          'toLon': sos.location.longitude,
-          'status': 'responding'
-        });
-
-        setState(() {
-          _rescuerLocation = LatLng(position.latitude, position.longitude);
-          print('Rescuer Location Updated - Lat: ${position.latitude}, Lon: ${position.longitude}');
-        });
-      } catch (e) {
-        print('Error updating location: $e');
-      }
-    });
+    context.read<RescuerLocationProvider>().startTracking(sos);
   }
 
+  // Update _stopLocationTracking method
   void _stopLocationTracking() {
-    _locationTimer?.cancel();
-    
-    // Update status to rescued in realtime database
-    databaseRef.update({
-      'status': 'rescued',
-      'frLat': null,
-      'frLon': null,
-      'toLat': null,
-      'toLon': null
-    });
-    
-    setState(() {
-      _rescuerLocation = null;
-    });
-  }
-
-  @override
-  void dispose() {
-    _locationTimer?.cancel();
-    super.dispose();
+    context.read<RescuerLocationProvider>().stopTracking();
   }
 
   @override
@@ -552,18 +509,17 @@ class _MyHomePageState extends State<MyHomePage> {
               ),
               if (_selectedLayer == 'Both' || _selectedLayer == 'Heatmap Only')
                 HeatMapLayer(
-                  heatMapDataSource: InMemoryHeatMapDataSource(data: heatmapData),
+                  heatMapDataSource:
+                      InMemoryHeatMapDataSource(data: heatmapData),
                   heatMapOptions: HeatMapOptions(
                     gradient: gradients,
                     minOpacity: 1,
                     radius: 90,
                   ),
-                  reset: _rebuildStream.stream,
                 ),
               if (_selectedLayer == 'Both' || _selectedLayer == 'Markers Only')
                 MarkerLayer(
                   markers: [
-                    // Existing SOS markers
                     ...List.generate(sosRequests.length, (index) {
                       final sos = sosRequests[index];
                       return Marker(
@@ -574,11 +530,15 @@ class _MyHomePageState extends State<MyHomePage> {
                           onTap: () => _showSOSDetails(context, sos),
                           child: Container(
                             decoration: BoxDecoration(
-                              color: sos.source == 'scrap' ? Colors.blue : Colors.red,
+                              color: sos.source == 'scrap'
+                                  ? Colors.blue
+                                  : Colors.red,
                               shape: BoxShape.circle,
                             ),
                             child: Icon(
-                              sos.source == 'scrap' ? Icons.crisis_alert : Icons.warning_amber,
+                              sos.source == 'scrap'
+                                  ? Icons.crisis_alert
+                                  : Icons.warning_amber,
                               color: Colors.white,
                               size: 20,
                             ),
@@ -586,10 +546,15 @@ class _MyHomePageState extends State<MyHomePage> {
                         ),
                       );
                     }),
-                    // Rescuer location marker
-                    if (_rescuerLocation != null)
+                    // Rescuer marker
+                    if (Provider.of<RescuerLocationProvider>(context,
+                                listen: true)
+                            .location !=
+                        null)
                       Marker(
-                        point: _rescuerLocation!,
+                        point: Provider.of<RescuerLocationProvider>(context,
+                                listen: false)
+                            .location!,
                         width: 30,
                         height: 30,
                         child: Container(
@@ -623,5 +588,59 @@ class _MyHomePageState extends State<MyHomePage> {
       original.latitude + latOffset,
       original.longitude + lngOffset,
     );
+  }
+}
+
+// Add this new class for location state management
+class RescuerLocationProvider extends ChangeNotifier {
+  LatLng? _location;
+  Timer? _locationTimer;
+  late DatabaseReference databaseRef;
+
+  LatLng? get location => _location;
+
+  RescuerLocationProvider() {
+    databaseRef = FirebaseDatabase.instance.ref();
+  }
+
+  void startTracking(SOSRequest sos) async {
+    _locationTimer?.cancel();
+    _locationTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      try {
+        final position = await Geolocator.getCurrentPosition();
+        _location = LatLng(position.latitude, position.longitude);
+
+        await databaseRef.set({
+          'frLat': position.latitude,
+          'frLon': position.longitude,
+          'toLat': sos.location.latitude,
+          'toLon': sos.location.longitude,
+          'status': 'responding'
+        });
+
+        notifyListeners();
+      } catch (e) {
+        print('Error updating location: $e');
+      }
+    });
+  }
+
+  void stopTracking() async {
+    _locationTimer?.cancel();
+    await databaseRef.update({
+      'status': 'rescued',
+      'frLat': null,
+      'frLon': null,
+      'toLat': null,
+      'toLon': null
+    });
+    _location = null;
+    notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _locationTimer?.cancel();
+    super.dispose();
   }
 }
