@@ -301,97 +301,140 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
-  // Add this method to combine all SOS requests
+  // Add a stream to listen to status updates
+  Stream<String?> _getStatusUpdates() {
+    return databaseRef.onValue.map((event) {
+      final data = event.snapshot.value as Map<dynamic, dynamic>?;
+      return data?['status'] as String?;
+    });
+  }
+
+  // Update the _getAllSOSRequests method
   Stream<List<SOSRequest>> _getAllSOSRequests() {
-    return rxdart.Rx.combineLatest3(
+    return rxdart.Rx.combineLatest4(
       _getOnlineSOSRequests(),
       _getOfflineSOSRequests(),
       _getScrapSOSRequests(),
+      _getStatusUpdates(),
       (List<SOSRequest> online, List<SOSRequest> offline,
-          List<SOSRequest> scrap) {
-        return [...online, ...offline, ...scrap];
+          List<SOSRequest> scrap, String? currentStatus) {
+        final allRequests = [...online, ...offline, ...scrap];
+        
+        // Update status for matching request
+        if (currentStatus != null) {
+          for (var request in allRequests) {
+            // Get the current location values from the database
+            final dbLat = databaseRef.child('toLat').toString();
+            final dbLon = databaseRef.child('toLon').toString();
+            
+            // Compare with more precision
+            if (request.location.latitude.toStringAsFixed(6) == dbLat &&
+                request.location.longitude.toStringAsFixed(6) == dbLon) {
+              request.status = currentStatus;
+            }
+          }
+        }
+        
+        return allRequests;
       },
     );
   }
 
   // Update the _updateSOSStatus method
   void _updateSOSStatus(SOSRequest sos, String newStatus) {
-    setState(() {
-      sos.status = newStatus;
-      print('Status updated to: $newStatus'); // Debug print
+    // Update the status in Realtime Database
+    databaseRef.set({
+      'status': newStatus,
+      'frLat': rescuerController.location.value?.latitude,
+      'frLon': rescuerController.location.value?.longitude,
+      'toLat': sos.location.latitude,
+      'toLon': sos.location.longitude,
     });
   }
 
-  // Update the _showSOSDetails method
+  // Update the _showSOSDetails method to use StatefulBuilder for real-time updates
   void _showSOSDetails(BuildContext context, SOSRequest sos) {
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: Row(
-          children: [
-            Icon(
-              sos.source == 'scrap' ? Icons.crisis_alert : Icons.warning_amber,
-              color: sos.source == 'scrap' ? Colors.blue : Colors.red,
-            ),
-            const SizedBox(width: 8),
-            Text(sos.source == 'scrap' ? 'Search and Rescue' : 'SOS Request'),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (sos.name.isNotEmpty) Text('User: ${sos.name}'),
-            const SizedBox(height: 8),
-            Text('Message: ${sos.msg}'),
-            const SizedBox(height: 8),
-            if (sos.source == 'scrap' && sos.url.isNotEmpty)
-              Text('Source URL: ${sos.url}'),
-            if (sos.source != 'scrap') ...[
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: Row(
+            children: [
+              Icon(
+                sos.source == 'scrap' ? Icons.crisis_alert : Icons.warning_amber,
+                color: sos.source == 'scrap' ? Colors.blue : _getStatusColor(sos.status),
+              ),
+              const SizedBox(width: 8),
+              Text(sos.source == 'scrap' ? 'Search and Rescue' : 'SOS Request'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (sos.name.isNotEmpty) Text('User: ${sos.name}'),
               const SizedBox(height: 8),
-              Text(
-                'Status: ${_getStatusMessage(sos.status)}',
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
+              Text('Message: ${sos.msg}'),
+              const SizedBox(height: 8),
+              if (sos.source == 'scrap' && sos.url.isNotEmpty)
+                Text('Source URL: ${sos.url}'),
+              if (sos.source != 'scrap') ...[
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Text('Status: '),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: _getStatusColor(sos.status),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        _getStatusMessage(sos.status),
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Close'),
+            ),
+            if (sos.source != 'scrap' && sos.status != 'rescued') ...[
+              ElevatedButton(
+                onPressed: () {
+                  _updateSOSStatus(sos, 'responding');
+                  _startLocationTracking(sos);
+                  setDialogState(() {}); // Update dialog state
+                  Navigator.pop(context);
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.yellow[700],
+                ),
+                child: const Text('Respond'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  _updateSOSStatus(sos, 'rescued');
+                  _stopLocationTracking();
+                  setDialogState(() {}); // Update dialog state
+                  Navigator.pop(context);
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green,
+                ),
+                child: const Text('Rescued'),
               ),
             ],
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-          if (sos.source != 'scrap') ...[
-            ElevatedButton(
-              onPressed: () {
-                setState(() {
-                  sos.status = 'responding';
-                });
-                _startLocationTracking(sos);
-                Navigator.pop(context);
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.yellow,
-              ),
-              child: const Text('Respond'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                setState(() {
-                  sos.status = 'rescued';
-                });
-                _stopLocationTracking();
-                Navigator.pop(context);
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.green,
-              ),
-              child: const Text('Rescued'),
-            ),
-          ],
-        ],
       ),
     );
   }
@@ -541,10 +584,28 @@ class _MyHomePageState extends State<MyHomePage> {
                       ],
                     )),
               if (_selectedLayer == 'Both' || _selectedLayer == 'Markers Only')
-                Obx(() => MarkerLayer(
+                StreamBuilder<DatabaseEvent>(
+                  stream: databaseRef.onValue,
+                  builder: (context, dbSnapshot) {
+                    return MarkerLayer(
                       markers: [
                         ...List.generate(sosRequests.length, (index) {
                           final sos = sosRequests[index];
+                          
+                          // Get current status and coordinates from database
+                          final currentStatus = dbSnapshot.data?.snapshot.child('status').value as String?;
+                          final dbLat = dbSnapshot.data?.snapshot.child('toLat').value?.toString();
+                          final dbLon = dbSnapshot.data?.snapshot.child('toLon').value?.toString();
+                          
+                          // Update local status if coordinates match
+                          if (currentStatus != null && 
+                              dbLat != null && 
+                              dbLon != null &&
+                              sos.location.latitude.toStringAsFixed(6) == dbLat &&
+                              sos.location.longitude.toStringAsFixed(6) == dbLon) {
+                            sos.status = currentStatus;
+                          }
+                          
                           return Marker(
                             point: sos.location,
                             width: 30,
@@ -555,7 +616,7 @@ class _MyHomePageState extends State<MyHomePage> {
                                 decoration: BoxDecoration(
                                   color: sos.source == 'scrap'
                                       ? Colors.blue
-                                      : Colors.red,
+                                      : _getStatusColor(sos.status),
                                   shape: BoxShape.circle,
                                 ),
                                 child: Icon(
@@ -587,7 +648,9 @@ class _MyHomePageState extends State<MyHomePage> {
                             ),
                           ),
                       ],
-                    )),
+                    );
+                  },
+                ),
             ],
           );
         },
